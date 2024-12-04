@@ -6,3 +6,6 @@ results
 animate_master.egg-info
 build
 dist
+tests
+third_party/facefusion/.assets
+third_party/facefusion/.jobs
