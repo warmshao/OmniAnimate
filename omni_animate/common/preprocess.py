@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# @Time    : 2024/9/7 11:07
+# @Time    : 2024/9/7
 # @Project : AnimateMaster
 # @FileName: preprocess.py
 import pdb
@@ -57,32 +57,10 @@ def convert_openpose_to_dict(keypoints, H, W, score_thred=0.3):
     return pose
 
 
-def preprocess_openpose(src_vpath, ref_image_path, **kwargs):
-    from animate_master.trt_models.rtmw_body_pose2d_model import RTMWBodyPose2dModel
-    from animate_master.trt_models.yolo_human_detect_model import YoloHumanDetectModel
-    from animate_master.common import utils
-    from animate_master.common import draw
+def preprocess_openpose(det_model, pose_model, src_vpath, ref_image_path, **kwargs):
+    from . import utils, draw
     from PIL import Image
 
-    if kwargs.get("det_model", None) is None:
-        det_kwargs = dict(
-            predict_type="trt",
-            model_path="./checkpoints/AnimateMaster/yolov10x.trt",
-        )
-
-        det_model = YoloHumanDetectModel(**det_kwargs)
-    else:
-        det_model = kwargs.get("det_model")
-
-    if kwargs.get("pose_model", None) is None:
-        # tensorrt 模型加载
-        pose_kwargs = dict(
-            predict_type="trt",
-            model_path="./checkpoints/AnimateMaster/rtmw-x_simcc-cocktail14_pt-ucoco_270e-384x288-f840f204_20231122.trt",
-        )
-        pose_model = RTMWBodyPose2dModel(**pose_kwargs)
-    else:
-        pose_model = kwargs.get("pose_model")
     score_thred = kwargs.get("score_thred", 0.3)
 
     # select ref-keypoint from reference pose for pose rescale
@@ -226,32 +204,10 @@ def pose_align(kpts_src, kpts_ref):
     return kpts_align
 
 
-def preprocess_openpose_v2(src_vpath, ref_image_path, **kwargs):
-    from animate_master.trt_models.rtmw_body_pose2d_model import RTMWBodyPose2dModel
-    from animate_master.trt_models.yolo_human_detect_model import YoloHumanDetectModel
-    from animate_master.common import utils
-    from animate_master.common import draw
+def preprocess_openpose_v2(det_model, pose_model, src_vpath, ref_image_path, **kwargs):
+    from . import utils, draw
     from PIL import Image
 
-    if kwargs.get("det_model", None) is None:
-        det_kwargs = dict(
-            predict_type="trt",
-            model_path="./checkpoints/AnimateMaster/yolov10x.trt",
-        )
-
-        det_model = YoloHumanDetectModel(**det_kwargs)
-    else:
-        det_model = kwargs.get("det_model")
-
-    if kwargs.get("pose_model", None) is None:
-        # tensorrt 模型加载
-        pose_kwargs = dict(
-            predict_type="trt",
-            model_path="./checkpoints/AnimateMaster/rtmw-x_simcc-cocktail14_pt-ucoco_270e-384x288-f840f204_20231122.trt",
-        )
-        pose_model = RTMWBodyPose2dModel(**pose_kwargs)
-    else:
-        pose_model = kwargs.get("pose_model")
     score_thred = kwargs.get("score_thred", 0.3)
 
     # select ref-keypoint from reference pose for pose rescale
