@@ -17,8 +17,29 @@ from diffusers.schedulers import EulerDiscreteScheduler
 from diffusers.utils import BaseOutput, logging
 from diffusers.utils.torch_utils import is_compiled_module, randn_tensor
 from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
+import torch
+import torch.utils.checkpoint
+from diffusers.models import AutoencoderKLTemporalDecoder
+from diffusers.schedulers import EulerDiscreteScheduler
+from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
+import numpy as np
+import os
+import torch.nn.functional as F
+import datetime
+from PIL import Image
+from huggingface_hub import hf_hub_download
+import cv2
+from torchvision.io import write_video
+import json
+import subprocess
 
+from ..models.unet_spatio_temporal_condition import UNetSpatioTemporalConditionModel
 from ..models.pose_net import PoseNet
+from ..common import utils
+from ..common import constants
+from ..common import preprocess
+from ..trt_models.yolo_human_detect_model import YoloHumanDetectModel
+from ..trt_models.rtmw_body_pose2d_model import RTMWBodyPose2dModel
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -95,22 +116,136 @@ class AnimateMasterPipeline(DiffusionPipeline):
 
     def __init__(
             self,
-            vae,
-            image_encoder,
-            unet,
-            scheduler,
-            feature_extractor,
-            pose_net,
+            **kwargs
     ):
-        super().__init__()
+        self.load_models(**kwargs)
+
+    def load_models(self, **kwargs):
+        self.token = kwargs.get("token", "")
+
+        device, dtype = utils.get_optimize_device()
+        # diffusion model
+        svd_base_model_id = "stabilityai/stable-video-diffusion-img2vid-xt-1-1"
+        svd_base_model_path = os.path.join(constants.CHECKPOINT_DIR, "stable-video-diffusion-img2vid-xt-1-1")
+        os.makedirs(svd_base_model_path, exist_ok=True)
+        hf_token = self.hf_token
+
+        if not os.path.exists(os.path.join(svd_base_model_path, "unet", "config.json")):
+            hf_hub_download(repo_id=svd_base_model_id, subfolder="unet",
+                            filename="config.json",
+                            local_dir=svd_base_model_path,
+                            token=hf_token)
+
+        self.unet = UNetSpatioTemporalConditionModel.from_config(
+            UNetSpatioTemporalConditionModel.load_config(svd_base_model_path, subfolder="unet"))
+
+        if not os.path.exists(os.path.join(svd_base_model_path, "vae", "config.json")):
+            hf_hub_download(repo_id=svd_base_model_id, subfolder="vae",
+                            filename="config.json",
+                            local_dir=svd_base_model_path,
+                            token=hf_token)
+        if not os.path.exists(os.path.join(svd_base_model_path, "vae", "diffusion_pytorch_model.fp16.safetensors")):
+            hf_hub_download(repo_id=svd_base_model_id, subfolder="vae",
+                            filename="diffusion_pytorch_model.fp16.safetensors",
+                            local_dir=svd_base_model_path,
+                            token=hf_token)
+        self.vae = AutoencoderKLTemporalDecoder.from_pretrained(
+            svd_base_model_path, subfolder="vae", variant='fp16')
+
+        if not os.path.exists(os.path.join(svd_base_model_path, "image_encoder", "config.json")):
+            hf_hub_download(repo_id=svd_base_model_id, subfolder="image_encoder",
+                            filename="config.json",
+                            local_dir=svd_base_model_path,
+                            token=hf_token)
+        if not os.path.exists(os.path.join(svd_base_model_path, "image_encoder", "model.fp16.safetensors")):
+            hf_hub_download(repo_id=svd_base_model_id, subfolder="image_encoder",
+                            filename="model.fp16.safetensors",
+                            local_dir=svd_base_model_path,
+                            token=hf_token)
+        self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(
+            svd_base_model_path, subfolder="image_encoder", variant='fp16')
+
+        if not os.path.exists(os.path.join(svd_base_model_path, "scheduler", "scheduler_config.json")):
+            hf_hub_download(repo_id=svd_base_model_id, subfolder="scheduler",
+                            filename="scheduler_config.json",
+                            local_dir=svd_base_model_path,
+                            token=hf_token)
+        self.scheduler = EulerDiscreteScheduler.from_pretrained(
+            svd_base_model_path, subfolder="scheduler")
+
+        if not os.path.exists(os.path.join(svd_base_model_path, "feature_extractor", "preprocessor_config.json")):
+            hf_hub_download(repo_id=svd_base_model_id, subfolder="feature_extractor",
+                            filename="preprocessor_config.json",
+                            local_dir=svd_base_model_path,
+                            token=hf_token)
+        self.feature_extractor = CLIPImageProcessor.from_pretrained(
+            svd_base_model_path, subfolder="feature_extractor")
+        # pose_net
+        self.pose_net = PoseNet(noise_latent_channels=self.unet.config.block_out_channels[0])
+
+        # AnimateMaster model
+        animate_master_model_id = "warmshao/AnimateMaster"
+        animate_master_base_model_path = os.path.join(constants.CHECKPOINT_DIR, "AnimateMaster")
+        os.makedirs(animate_master_base_model_path, exist_ok=True)
+        unet_model_path = os.path.join(animate_master_base_model_path, "MimicMotion-20240923170036", "unet.pth")
+        if not os.path.exists(unet_model_path):
+            hf_hub_download(repo_id=animate_master_model_id, subfolder="MimicMotion-20240923170036",
+                            filename="unet.pth",
+                            local_dir=animate_master_base_model_path,
+                            token=hf_token)
+        unet_state_dict = torch.load(unet_model_path)
+        self.unet.load_state_dict(unet_state_dict, strict=False)
+        self.unet.eval().to(device, dtype=dtype)
+
+        cond_net_model_path = os.path.join(animate_master_base_model_path, "MimicMotion-20240923170036",
+                                           "cond_net_openpose.pth")
+        if not os.path.exists(cond_net_model_path):
+            hf_hub_download(repo_id=animate_master_model_id, subfolder="MimicMotion-20240923170036",
+                            filename="cond_net_openpose.pth",
+                            local_dir=animate_master_base_model_path,
+                            token=hf_token)
+        pose_net_state_dict = torch.load(cond_net_model_path)
+        self.pose_net.load_state_dict(pose_net_state_dict, strict=True)
+        self.pose_net.eval().to(device, dtype=dtype)
+        self.vae.eval().to(device, dtype=dtype)
+        self.image_encoder.eval().to(device, dtype=dtype)
+
+        # preprocess
+        detect_model_path = os.path.join(animate_master_base_model_path, "preprocess",
+                                         "yolov10x.onnx")
+        if not os.path.exists(detect_model_path):
+            hf_hub_download(repo_id=animate_master_model_id, subfolder="preprocess",
+                            filename="yolov10x.onnx",
+                            local_dir=animate_master_base_model_path,
+                            token=hf_token)
+        det_kwargs = dict(
+            predict_type="ort",
+            model_path=detect_model_path,
+        )
+
+        self.detect_model = YoloHumanDetectModel(**det_kwargs)
+
+        pose_model_path = os.path.join(animate_master_base_model_path, "preprocess",
+                                       "rtmw-x_simcc-cocktail14_pt-ucoco_270e-384x288-f840f204_20231122.onnx")
+        if not os.path.exists(pose_model_path):
+            hf_hub_download(repo_id=animate_master_model_id, subfolder="preprocess",
+                            filename="rtmw-x_simcc-cocktail14_pt-ucoco_270e-384x288-f840f204_20231122.onnx",
+                            local_dir=animate_master_base_model_path,
+                            token=hf_token)
+
+        pose_kwargs = dict(
+            predict_type="ort",
+            model_path=pose_model_path,
+        )
+        self.pose_model = RTMWBodyPose2dModel(**pose_kwargs)
 
         self.register_modules(
-            vae=vae,
-            image_encoder=image_encoder,
-            unet=unet,
-            scheduler=scheduler,
-            feature_extractor=feature_extractor,
-            pose_net=pose_net,
+            vae=self.vae,
+            image_encoder=self.image_encoder,
+            unet=self.unet,
+            scheduler=self.scheduler,
+            feature_extractor=self.feature_extractor,
+            pose_net=self.pose_net,
         )
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
@@ -332,15 +467,74 @@ class AnimateMasterPipeline(DiffusionPipeline):
             extra_step_kwargs["generator"] = generator
         return extra_step_kwargs
 
+    def pre_process(self, ref_image_path, src_video_path, stride=1, height=576, width=1024, **kwargs):
+        ref_image = Image.open(ref_image_path).convert("RGB")
+        org_ref_w, org_ref_h = ref_image.size
+        ref_pose_image = preprocess.preprocess_openpose_image(self.detect_model, self.pose_model,
+                                                              ref_image_path, draw_foot=False,
+                                                              draw_hand=False, draw_face=True,
+                                                              to_rgb=True, score_thred=0.3)
+        ref_pose_image = Image.fromarray(ref_pose_image)
+
+        pose_images = preprocess.preprocess_openpose(self.detect_model, self.pose_model,
+                                                     src_video_path, ref_image_path,
+                                                     draw_foot=False, draw_hand=True,
+                                                     draw_face=True,
+                                                     to_rgb=True, score_thred=0.3)
+        pose_images = [Image.fromarray(image) for image in pose_images]
+        w, h = ref_image.size
+        if kwargs.get("keep_ratio", True):
+            short_size = min(height, width)
+            scale = short_size / min(w, h)
+            ow = int(w * scale // 64 * 64)
+            oh = int(h * scale // 64 * 64)
+        else:
+            ow = width
+            oh = height
+        ref_image = ref_image.resize((ow, oh))
+        pose_images = [ref_pose_image] + pose_images[::stride]
+        pose_images = np.stack([np.array(img.resize((ow, oh))) for img in pose_images])
+        pose_pixels = torch.from_numpy(pose_images) / 127.5 - 1
+        pose_pixels = pose_pixels.permute(0, 3, 1, 2)
+        return [ref_image], pose_pixels, org_ref_w, org_ref_h, ow, oh
+
+    def post_process(self, ref_image_path, animate_video_path, **kwargs):
+        image_path = os.path.abspath(ref_image_path)
+        video_path = os.path.abspath(animate_video_path)
+        output_path = os.path.splitext(video_path)[0] + "-face_swap.mp4"
+        PROJECT_DIR = constants.PROJECT_DIR
+        FACEFUSION_DIR = os.path.join(constants.PROJECT_DIR, "third_party/facefusion")
+        CUR_DIR = os.getcwd()
+        os.chdir(FACEFUSION_DIR)
+        job_dir = '.jobs'
+        os.makedirs(os.path.join(job_dir, 'queued'), exist_ok=True)
+        template_json = os.path.join(PROJECT_DIR, "assets/facefusion_templates/omni_animate_v1.json")
+        with open(template_json, "r") as fin:
+            template_data = json.load(fin)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        job_id = "omni_animate_v1"
+        template_data['steps'][0]['args']['source_paths'] = [image_path]
+        template_data['steps'][0]['args']['target_path'] = video_path
+        template_data['steps'][0]['args']['output_path'] = output_path
+        with open(os.path.join(job_dir, "queued", f"{job_id}.json"), "w") as fw:
+            json.dump(template_data, fw)
+        commands = ['python', 'facefusion.py', 'job-run', job_id, '-j', job_dir]
+        print(commands)
+        run_ret = subprocess.run(commands).returncode
+        os.chdir(CUR_DIR)
+        return output_path
+
     @torch.no_grad()
     def __call__(
             self,
-            image: Union[PIL.Image.Image, List[PIL.Image.Image], torch.FloatTensor],
-            image_pose: Union[torch.FloatTensor],
+            ref_image_path,
+            src_video_path,
             height: int = 576,
             width: int = 1024,
+            stride: int = 1,
             num_frames: Optional[int] = None,
             tile_size: Optional[int] = 16,
+            seed=1234,
             tile_overlap: Optional[int] = 4,
             num_inference_steps: int = 25,
             min_guidance_scale: float = 1.0,
@@ -353,12 +547,13 @@ class AnimateMasterPipeline(DiffusionPipeline):
             num_videos_per_prompt: Optional[int] = 1,
             generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
             latents: Optional[torch.FloatTensor] = None,
-            output_type: Optional[str] = "pil",
+            output_type: Optional[str] = "pt",
             callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
             callback_on_step_end_tensor_inputs: List[str] = ["latents"],
             return_dict: bool = True,
             device: Union[str, torch.device] = None,
-            scale_latents=False,
+            scale_latents=True,
+            token=None,
             **kwargs
     ):
         r"""
@@ -374,7 +569,7 @@ class AnimateMasterPipeline(DiffusionPipeline):
             width (`int`, *optional*, defaults to `self.unet.config.sample_size * self.vae_scale_factor`):
                 The width in pixels of the generated image.
             num_frames (`int`, *optional*):
-                The number of video frames to generate. Defaults to 14 for `stable-video-diffusion-img2vid` 
+                The number of video frames to generate. Defaults to 14 for `stable-video-diffusion-img2vid`
                 and to 25 for `stable-video-diffusion-img2vid-xt`
             num_inference_steps (`int`, *optional*, defaults to 25):
                 The number of denoising steps. More denoising steps usually lead to a higher quality image at the
@@ -387,17 +582,17 @@ class AnimateMasterPipeline(DiffusionPipeline):
                 Frames per second.The rate at which the generated images shall be exported to a video after generation.
                 Note that Stable Diffusion Video's UNet was micro-conditioned on fps-1 during training.
             motion_bucket_id (`int`, *optional*, defaults to 127):
-                The motion bucket ID. Used as conditioning for the generation. 
+                The motion bucket ID. Used as conditioning for the generation.
                 The higher the number the more motion will be in the video.
             noise_aug_strength (`float`, *optional*, defaults to 0.02):
-                The amount of noise added to the init image, 
+                The amount of noise added to the init image,
                 the higher it is the less the video will look like the init image. Increase it for more motion.
             image_only_indicator (`bool`, *optional*, defaults to False):
                 Whether to treat the inputs as batch of images instead of videos.
             decode_chunk_size (`int`, *optional*):
                 The number of frames to decode at a time.The higher the chunk size, the higher the temporal consistency
-                between frames, but also the higher the memory consumption. 
-                By default, the decoder will decode all frames at once for maximal quality. 
+                between frames, but also the higher the memory consumption.
+                By default, the decoder will decode all frames at once for maximal quality.
                 Reduce `decode_chunk_size` to reduce memory usage.
             num_videos_per_prompt (`int`, *optional*, defaults to 1):
                 The number of images to generate per prompt.
@@ -427,7 +622,7 @@ class AnimateMasterPipeline(DiffusionPipeline):
 
         Returns:
             [`~pipelines.stable_diffusion.StableVideoDiffusionPipelineOutput`] or `tuple`:
-                If `return_dict` is `True`, 
+                If `return_dict` is `True`,
                 [`~pipelines.stable_diffusion.StableVideoDiffusionPipelineOutput`] is returned,
                 otherwise a `tuple` is returned where the first element is a list of list with the generated frames.
 
@@ -449,12 +644,27 @@ class AnimateMasterPipeline(DiffusionPipeline):
         export_to_video(frames, "generated.mp4", fps=7)
         ```
         """
+        if not os.path.exists(ref_image_path) or not os.path.exists(src_video_path):
+            return None
+
+        vcap = cv2.VideoCapture(src_video_path)
+        wfps = int(vcap.get(cv2.CAP_PROP_FPS)) // stride
+        vcap.release()
         # 0. Default height and width to unet
         height = height or self.unet.config.sample_size * self.vae_scale_factor
         width = width or self.unet.config.sample_size * self.vae_scale_factor
 
+        image, image_pose, org_ref_w, org_ref_h, ow, oh = self.pre_process(ref_image_path, src_video_path,
+                                                                           height=height,
+                                                                           width=width, stride=stride,
+                                                                           **kwargs)
+        num_frames = image_pose.size(0)
+
         num_frames = num_frames if num_frames is not None else self.unet.config.num_frames
         decode_chunk_size = decode_chunk_size if decode_chunk_size is not None else num_frames
+
+        generator = torch.Generator()
+        generator.manual_seed(seed=seed)
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(image, height, width)
@@ -466,12 +676,12 @@ class AnimateMasterPipeline(DiffusionPipeline):
             batch_size = len(image)
         else:
             batch_size = image.shape[0]
-        device = device if device is not None else self._execution_device
+        device_, dtype_ = utils.get_optimize_device()
+        device = device if device is not None else device_
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
         # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
         # corresponds to doing no classifier free guidance.
         self._guidance_scale = max_guidance_scale
-
         # 3. Encode input image
         image_embeddings = self._encode_image(image, device, num_videos_per_prompt, self.do_classifier_free_guidance)
 
@@ -480,7 +690,7 @@ class AnimateMasterPipeline(DiffusionPipeline):
         fps = fps - 1
 
         # 4. Encode input image using VAE
-        image = self.image_processor.preprocess(image, height=height, width=width).to(device)
+        image = self.image_processor.preprocess(image, height=oh, width=ow).to(device)
         noise = randn_tensor(image.shape, generator=generator, device=device, dtype=image.dtype)
         image = image + noise_aug_strength * noise
 
@@ -518,8 +728,8 @@ class AnimateMasterPipeline(DiffusionPipeline):
             batch_size * num_videos_per_prompt,
             tile_size,
             num_channels_latents,
-            height,
-            width,
+            oh,
+            ow,
             image_embeddings.dtype,
             device,
             generator,
@@ -618,4 +828,28 @@ class AnimateMasterPipeline(DiffusionPipeline):
         if not return_dict:
             return frames
 
-        return AnimateMasterPipelineOutput(frames=frames)
+        def scale_video(video, width, height):
+            video_reshaped = video.view(-1, *video.shape[2:])  # [batch*frames, channels, height, width]
+            scaled_video = F.interpolate(video_reshaped, size=(height, width), mode='bilinear', align_corners=False)
+            scaled_video = scaled_video.view(*video.shape[:2], scaled_video.shape[1], height,
+                                             width)  # [batch, frames, channels, height, width]
+
+            return scaled_video
+
+        if kwargs.get("keep_ref_dim", False):
+            frames = scale_video(frames, org_ref_w, org_ref_h)
+        frames = (frames * 255.0).to(torch.uint8)[0, 1:].permute((0, 2, 3, 1))
+        date_str = datetime.datetime.now().strftime("%m-%d-%H-%M")
+        result_dir = kwargs.get("result_dir", "./results/{}-{}".format(self.__class__.__name__, date_str))
+        os.makedirs(result_dir, exist_ok=True)
+        save_vapth = os.path.join(result_dir, os.path.basename(src_video_path))
+        options = {
+            'crf': '18',  # 较低的 CRF 值表示更高的质量
+            'preset': 'fast',  # 较慢的预设通常会产生更好的质量
+            'video_bitrate': '10M'  # 设置目标比特率为 10 Mbps
+        }
+        write_video(save_vapth, frames.cpu(), wfps, options=options)
+        torch.cuda.empty_cache()
+        # face swap
+        save_vapth = self.post_process(ref_image_path, animate_video_path=save_vapth)
+        return save_vapth

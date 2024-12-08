@@ -112,3 +112,12 @@ def seed_everything(seed):
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed % (2 ** 32))
     random.seed(seed)
+
+
+def get_optimize_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda"), torch.float16
+    elif torch.backends.mps.is_available():
+        return torch.device("mps"), torch.float32
+    else:
+        return torch.device("cpu"), torch.float32
