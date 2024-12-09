@@ -4,6 +4,7 @@
 # @Email   : wenshaoguo1026@gmail.com
 # @Project : OmniAnimate
 # @FileName: webui.py
+import pdb
 
 import gradio as gr
 import torch
@@ -11,7 +12,7 @@ import argparse
 from typing import Optional
 from omni_animate.pipelines.pipeline_animate_master import AnimateMasterPipeline
 
-pipe = AnimateMasterPipeline()
+pipe: AnimateMasterPipeline = None
 
 
 def process_animation(
@@ -24,10 +25,11 @@ def process_animation(
         keep_ref_dim: bool,
         stride: int,
         seed: int,
+        denoise_steps: int,
         guidance_scale: float
 ) -> Optional[str]:
     try:
-
+        global pipe
         # Run the animation pipeline
         output_path = pipe(
             ref_image_path=ref_image,
@@ -39,7 +41,7 @@ def process_animation(
             stride=stride,
             fps=8,
             noise_aug_strength=0,
-            num_inference_steps=25,
+            num_inference_steps=denoise_steps,
             keep_ratio=keep_ratio,
             keep_ref_dim=keep_ref_dim,
             seed=seed,
@@ -56,8 +58,8 @@ def process_animation(
 
 def parse_args():
     parser = argparse.ArgumentParser(description='OmniAnimate WebUI')
-    parser.add_argument('--host', type=str, default='0.0.0.0',
-                        help='服务器IP地址 (默认: 0.0.0.0)')
+    parser.add_argument('--host', type=str, default='127.0.0.1',
+                        help='服务器IP地址 (默认: 127.0.0.1)')
     parser.add_argument('--port', type=int, default=6006,
                         help='服务器端口 (默认: 6006)')
     parser.add_argument('--token', type=str, default='',
@@ -69,10 +71,22 @@ def parse_args():
     return parser.parse_args()
 
 
+js_func = """
+    function refresh() {
+        const url = new URL(window.location);
+
+        if (url.searchParams.get('__theme') !== 'dark') {
+            url.searchParams.set('__theme', 'dark');
+            window.location.href = url.href;
+        }
+    }
+    """
+
+
 # Create the Gradio interface
 def create_ui():
-    with gr.Blocks(title="OmniAnimate") as demo:
-        gr.Markdown("# OmniAnimate - 视频驱动图片动画")
+    with gr.Blocks(title="OmniAnimate", theme=gr.themes.Soft(font=[gr.themes.GoogleFont("Plus Jakarta Sans")]), js=js_func) as demo:
+        gr.Markdown("# OmniAnimate")
 
         with gr.Row():
             # Left column - Reference image
@@ -91,18 +105,25 @@ def create_ui():
                 output_video = gr.Video(label="生成的视频")
 
                 # Parameters
-                with gr.Box():
-                    gr.Markdown("### 参数设置")
-                    token_input = gr.Textbox(label="Token", placeholder="输入你的token")
+                gr.Markdown("### 参数设置")
+                token_input = gr.Textbox(label="Token", placeholder="输入你的token")
+
+                with gr.Row():
                     height_input = gr.Number(label="Height", value=1024, precision=0)
                     width_input = gr.Number(label="Width", value=576, precision=0)
+
+                with gr.Row():
                     keep_ratio = gr.Checkbox(label="Keep Ratio", value=True)
-                    keep_ref_dim = gr.Checkbox(label="Keep Reference Dimensions", value=False)
+                    keep_ref_dim = gr.Checkbox(label="Keep Reference Dims", value=False)
+
+                with gr.Row():
                     stride_input = gr.Number(label="Stride", value=1, precision=0)
                     seed_input = gr.Number(label="Seed", value=1234, precision=0)
+                with gr.Row():
                     guidance_input = gr.Number(label="Guidance Scale", value=3.0)
+                    denoise_steps = gr.Number(label="Denoise Steps", value=25)
 
-                    run_btn = gr.Button("运行", variant="primary")
+                run_btn = gr.Button("运行", variant="primary")
 
         # Set up the processing function
         run_btn.click(
@@ -117,6 +138,7 @@ def create_ui():
                 keep_ref_dim,
                 stride_input,
                 seed_input,
+                denoise_steps,
                 guidance_input
             ],
             outputs=output_video
@@ -128,7 +150,7 @@ def create_ui():
 if __name__ == "__main__":
     # Parse command line arguments
     args = parse_args()
-
+    pipe = AnimateMasterPipeline(token=args.token)
     # Create and launch the UI
     demo = create_ui()
     demo.launch(
