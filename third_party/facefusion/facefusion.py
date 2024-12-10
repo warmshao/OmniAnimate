@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import torch
 
 os.environ['OMP_NUM_THREADS'] = '1'
 
