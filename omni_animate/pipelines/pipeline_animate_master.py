@@ -144,7 +144,8 @@ class AnimateMasterPipeline(DiffusionPipeline):
                 hf_token = response_data['hf_token']
             else:
                 print("auth fail !")
-                shutil.rmtree(constants.CHECKPOINT_DIR)
+                pdb.set_trace()
+                # shutil.rmtree(constants.CHECKPOINT_DIR)
         except Exception as e:
             print("auth fail !!")
             return

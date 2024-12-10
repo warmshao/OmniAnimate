@@ -1,3 +1,5 @@
+import pdb
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,7 +13,6 @@ import threading
 import shutil
 import time
 import multiprocessing
-from functools import partial
 
 from omni_animate.pipelines.pipeline_animate_master import AnimateMasterPipeline
 
@@ -25,8 +26,8 @@ class AnimationRequest(BaseModel):
     keep_ref_dim: bool = False
     stride: int = 1
     seed: int = 1234
-    num_inference_steps: int = 20
     guidance_scale: float = 3.0
+    num_inference_steps: int = 20
 
 
 class TaskStatus(BaseModel):
@@ -38,33 +39,26 @@ class TaskStatus(BaseModel):
 
 # 任务处理器
 class TaskProcessor:
-    def __init__(self, num_workers: int = 1, token: str = ""):
+    def __init__(self, token: str):
         self.task_queue = multiprocessing.Queue()
         self.results = {}
-        self.num_workers = num_workers
-        self.workers = []
         self.running = True
         self.token = token
+        pdb.set_trace()
+        self.pipe = AnimateMasterPipeline(token=self.token)
 
     def start(self):
-        for _ in range(self.num_workers):
-            worker = multiprocessing.Process(target=self._worker_process)
-            worker.start()
-            self.workers.append(worker)
-
+        worker = multiprocessing.Process(target=self._worker_process)
+        worker.start()
         self.result_thread = threading.Thread(target=self._collect_results)
         self.result_thread.start()
 
     def stop(self):
         self.running = False
-        for _ in range(self.num_workers):
-            self.task_queue.put(None)
-        for worker in self.workers:
-            worker.join()
+        self.task_queue.put(None)  # Signal the worker to stop
         self.result_thread.join()
 
     def _worker_process(self):
-        pipe = AnimateMasterPipeline(token=self.token)
         while True:
             task = self.task_queue.get()
             if task is None:
@@ -72,7 +66,7 @@ class TaskProcessor:
 
             task_id, ref_image_path, drive_video_path, params = task
             try:
-                output_path = pipe(
+                output_path = self.pipe(
                     ref_image_path=ref_image_path,
                     src_video_path=drive_video_path,
                     **params
@@ -146,7 +140,7 @@ def create_startup_event(token):
         global task_processor
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        task_processor = TaskProcessor(num_workers=1, token=token)
+        task_processor = TaskProcessor(token=token)
         task_processor.start()
 
 
