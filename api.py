@@ -1,5 +1,6 @@
 """
-uvicorn api:app --host 127.0.0.1 --port 6006 --reload
+export OMNI_TOKEN=omni-ae342931-814d-4a49-97a6-cedf6af3dd18
+uvicorn api:app --host 0.0.0.0 --port 6006
 """
 import pdb
 from typing import Annotated

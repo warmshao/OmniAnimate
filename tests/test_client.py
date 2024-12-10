@@ -1,17 +1,16 @@
 """
 python tests/test_client.py \
---token omni-d99745d8-b2e6-4e2a-9982-9f930fca53e0 \
+--server http://129.213.81.69:6006 \
+--token omni-ae342931-814d-4a49-97a6-cedf6af3dd18 \
 --ref-image assets/examples/img.png \
 --drive-video assets/examples/001.mp4
 """
+
+import os
 import requests
 import time
 import argparse
-import os
 from typing import Optional
-from pathlib import Path
-from urllib.parse import urlencode
-import time
 
 
 class OmniAnimateClient:
@@ -35,38 +34,35 @@ class OmniAnimateClient:
             check_interval: float = 10.0
     ) -> Optional[str]:
         """
-        创建并处理动画任务
+        Create and process an animation task.
 
         Args:
-            ref_image_path: 参考图片路径
-            drive_video_path: 驱动视频路径
-            token: API token
-            height: 输出高度
-            width: 输出宽度
-            keep_ratio: 是否保持宽高比
-            keep_ref_dim: 是否保持参考图像尺寸
-            stride: 步长
-            seed: 随机种子
-            guidance_scale: 引导尺度
-            wait_complete: 是否等待任务完成
-            check_interval: 检查任务状态的间隔（秒）
+            ref_image_path: Path to the reference image.
+            drive_video_path: Path to the driving video.
+            token: API token.
+            height: Output height.
+            width: Output width.
+            keep_ratio: Whether to maintain aspect ratio.
+            keep_ref_dim: Whether to keep the reference image dimensions.
+            stride: Stride.
+            seed: Random seed.
+            guidance_scale: Guidance scale.
+            wait_complete: Whether to wait for task completion.
+            check_interval: Interval to check task status (in seconds).
 
         Returns:
-            如果wait_complete为True，返回输出视频路径；否则返回任务ID
+            If wait_complete is True, returns the output video path; otherwise, returns the task ID.
         """
-        # 检查文件是否存在
         if not os.path.exists(ref_image_path):
-            raise FileNotFoundError(f"参考图片不存在: {ref_image_path}")
+            raise FileNotFoundError(f"Reference image not found: {ref_image_path}")
         if not os.path.exists(drive_video_path):
-            raise FileNotFoundError(f"驱动视频不存在: {drive_video_path}")
+            raise FileNotFoundError(f"Driving video not found: {drive_video_path}")
 
-        # Prepare files and form data
         files = {
             'ref_image': (os.path.basename(ref_image_path), open(ref_image_path, 'rb'), 'image/jpeg'),
             'drive_video': (os.path.basename(drive_video_path), open(drive_video_path, 'rb'), 'video/mp4')
         }
 
-        # Prepare form data
         params = {
             'token': token,
             'height': height,
@@ -81,7 +77,6 @@ class OmniAnimateClient:
         print(params)
 
         try:
-            # 发送请求
             import json
             response = requests.post(
                 f"{self.base_url}/animate",
@@ -96,70 +91,64 @@ class OmniAnimateClient:
             if not wait_complete:
                 return task_id
 
-            # 等待任务完成
             while True:
                 status = self.get_task_status(task_id)
                 if status['status'] == 'completed':
                     return self.get_output_video(task_id)
                 elif status['status'] == 'failed':
-                    raise RuntimeError(f"任务失败: {status.get('error', '未知错误')}")
+                    raise RuntimeError(f"Task failed: {status.get('error', 'Unknown error')}")
 
                 time.sleep(check_interval)
 
         finally:
-            # 关闭文件
             for file in files.values():
                 file[1].close()
 
     def get_task_status(self, task_id: str) -> dict:
-        """获取任务状态"""
+        """Get task status."""
         response = requests.get(f"{self.base_url}/status/{task_id}")
         response.raise_for_status()
         return response.json()
 
     def get_output_video(self, task_id: str, save_dir: str = "./results") -> str:
-        """获取输出视频路径"""
+        """Get output video path."""
         os.makedirs(save_dir, exist_ok=True)
         response = requests.get(f"{self.base_url}/output/{task_id}", stream=True)
-        # 检查响应状态码
         if response.status_code == 200:
-            # 从响应头获取文件名
             content_disposition = response.headers.get('content-disposition')
             if content_disposition:
                 filename = content_disposition.split('filename=')[-1].strip('"')
             else:
-                filename = f"output_video-{time.time()}.mp4"  # 默认文件名
+                filename = f"output_video-{time.time()}.mp4"
 
-            # 打开一个文件用于写入二进制数据
             with open(os.path.join(save_dir, filename), "wb") as f:
-                # 分块写入文件
                 for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:  # 过滤掉空块
+                    if chunk:
                         f.write(chunk)
-            print(f"视频已成功保存为 {os.path.join(save_dir, filename)}")
+            print(f"Video successfully saved as {os.path.join(save_dir, filename)}")
         else:
-            print(f"请求失败，状态码: {response.status_code}")
+            print(f"Request failed, status code: {response.status_code}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='OmniAnimate API 客户端')
-    parser.add_argument('--ref-image', required=True, help='参考图片路径')
-    parser.add_argument('--drive-video', required=True, help='驱动视频路径')
+    parser = argparse.ArgumentParser(description='OmniAnimate API Client')
+    parser.add_argument('--ref-image', required=True, help='Path to the reference image')
+    parser.add_argument('--drive-video', required=True, help='Path to the driving video')
     parser.add_argument('--token', required=True, help='API token')
-    parser.add_argument('--server', default='http://localhost:6006', help='服务器地址')
-    parser.add_argument('--height', type=int, default=1024, help='输出高度')
-    parser.add_argument('--width', type=int, default=576, help='输出宽度')
+    parser.add_argument('--server', default='http://localhost:6006', help='Server URL')
+    parser.add_argument('--height', type=int, default=1024, help='Output height')
+    parser.add_argument('--width', type=int, default=576, help='Output width')
     parser.add_argument('--no-keep-ratio', action='store_false', dest='keep_ratio',
-                        help='不保持宽高比')
+                        help='Do not maintain aspect ratio')
     parser.add_argument('--keep-ref-dim', action='store_true',
-                        help='保持参考图像尺寸')
-    parser.add_argument('--stride', type=int, default=1, help='步长')
-    parser.add_argument('--denoise_steps', type=int, default=20, help='denoise_steps')
-    parser.add_argument('--seed', type=int, default=1234, help='随机种子')
+                        help='Keep reference image dimensions')
+    parser.add_argument('--stride', type=int, default=1, help='Stride')
+    parser.add_argument('--denoise_steps', type=int, default=25, help='Denoise steps')
+    parser.add_argument('--seed', type=int, default=1234, help='Random seed')
     parser.add_argument('--guidance-scale', type=float, default=3.0,
-                        help='引导尺度')
+                        help='Guidance scale')
     parser.add_argument('--async', action='store_true', dest='async_mode',
-                        help='异步模式（不等待完成）')
+                        help='Asynchronous mode (do not wait for completion)')
 
     args = parser.parse_args()
 
@@ -182,10 +171,10 @@ def main():
         )
 
         if args.async_mode:
-            print(f"任务已提交，任务ID: {result}")
+            print(f"Task submitted, task ID: {result}")
 
     except Exception as e:
-        print(f"错误: {str(e)}")
+        print(f"Error: {str(e)}")
 
 
 if __name__ == "__main__":
