@@ -1,5 +1,8 @@
+"""
+uvicorn api:app --host 127.0.0.1 --port 6006 --reload
+"""
 import pdb
-
+from typing import Annotated
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -13,6 +16,9 @@ import threading
 import shutil
 import time
 import multiprocessing
+from fastapi.responses import FileResponse
+
+from sympy.physics.vector.printing import params
 
 from omni_animate.pipelines.pipeline_animate_master import AnimateMasterPipeline
 
@@ -39,16 +45,14 @@ class TaskStatus(BaseModel):
 
 # 任务处理器
 class TaskProcessor:
-    def __init__(self, token: str):
+    def __init__(self, pipe):
         self.task_queue = multiprocessing.Queue()
         self.results = {}
         self.running = True
-        self.token = token
-        pdb.set_trace()
-        self.pipe = AnimateMasterPipeline(token=self.token)
+        self.pipe = pipe
 
     def start(self):
-        worker = multiprocessing.Process(target=self._worker_process)
+        worker = threading.Thread(target=self._worker_process)
         worker.start()
         self.result_thread = threading.Thread(target=self._collect_results)
         self.result_thread.start()
@@ -121,27 +125,16 @@ app.add_middleware(
 )
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description='OmniAnimate API')
-    parser.add_argument('--host', type=str, default='127.0.0.1',
-                        help='服务器IP地址 (默认: 127.0.0.1)')
-    parser.add_argument('--port', type=int, default=6006,
-                        help='服务器端口 (默认: 6006)')
-    parser.add_argument('--debug', action='store_true',
-                        help='是否启用调试模式 (默认: False)')
-    parser.add_argument('--token', type=str, required=True,
-                        help='用于动画管道的令牌')
-    return parser.parse_args()
-
-
-def create_startup_event(token):
-    @app.on_event("startup")
-    async def startup_event():
-        global task_processor
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        task_processor = TaskProcessor(token=token)
-        task_processor.start()
+@app.on_event("startup")
+async def startup_event():
+    global task_processor
+    token = os.getenv("OMNI_TOKEN", '')
+    print(f"Initializing pipeline with token: {token}")
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    pipe = AnimateMasterPipeline(token=token)
+    task_processor = TaskProcessor(pipe=pipe)
+    task_processor.start()
 
 
 @app.on_event("shutdown")
@@ -165,14 +158,35 @@ async def save_upload_file(upload_file: UploadFile) -> str:
 
 @app.post("/animate", response_model=TaskStatus)
 async def create_animation(
-        ref_image: UploadFile = File(...),
-        drive_video: UploadFile = File(...),
-        params: AnimationRequest = Form(...)
+        ref_image: Annotated[UploadFile, File()],
+        drive_video: Annotated[UploadFile, File()],
+        token: Annotated[str, Form()],
+        height: Annotated[int, Form()],
+        width: Annotated[int, Form()],
+        keep_ratio: Annotated[bool, Form()],
+        keep_ref_dim: Annotated[bool, Form()],
+        stride: Annotated[int, Form()],
+        seed: Annotated[int, Form()],
+        guidance_scale: Annotated[float, Form()],
+        num_inference_steps: Annotated[int, Form()]
 ):
     """创建新的动画生成任务"""
     task_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     try:
+        params = AnimationRequest(
+            token=token,
+            height=height,
+            width=width,
+            keep_ratio=keep_ratio,
+            keep_ref_dim=keep_ref_dim,
+            stride=stride,
+            seed=seed,
+            guidance_scale=guidance_scale,
+            num_inference_steps=num_inference_steps
+        )
+        print(params)
+
         # 异步保存上传的文件
         ref_image_path = await save_upload_file(ref_image)
         drive_video_path = await save_upload_file(drive_video)
@@ -222,15 +236,10 @@ async def get_output_video(task_id: str):
     if not os.path.exists(task["output_path"]):
         raise HTTPException(status_code=404, detail="Output file not found")
 
-    return {"file_path": task["output_path"]}
+    return FileResponse(task["output_path"], media_type='video/mp4', filename=os.path.basename(task["output_path"]))
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    create_startup_event(args.token)  # 传递 token
-    uvicorn.run(
-        "api:app",  # 确保这里使用的是你的文件名，比如 main.py
-        host=args.host,
-        port=args.port,
-        reload=args.debug
-    )
+    import uvicorn
+
+    uvicorn.run("main:app", host="127.0.0.1", port=6006, reload=True)
