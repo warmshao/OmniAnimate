@@ -7,7 +7,7 @@
 #### Synchronous Mode (Wait for completion)
 
 ```bash
-python client.py \
+python api_client.py \
     --ref-image path/to/image.jpg \
     --drive-video path/to/video.mp4 \
     --token omni-ae342931-814d-4a49-97a6-cedf6af3dd18 \
@@ -19,7 +19,7 @@ python client.py \
 #### Asynchronous Mode (Returns task ID immediately)
 
 ```bash
-python client.py \
+python api_client.py \
     --ref-image path/to/image.jpg \
     --token omni-ae342931-814d-4a49-97a6-cedf6af3dd18 \
     --server http://129.213.81.69:6006 \
@@ -31,7 +31,7 @@ python client.py \
 #### Synchronous Call Example
 
 ```python
-from client import OmniAnimateClient
+from api_client import OmniAnimateClient
 
 # Create client instance
 client = OmniAnimateClient("http://localhost:8000")

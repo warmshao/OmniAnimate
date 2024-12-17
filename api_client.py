@@ -1,5 +1,5 @@
 """
-python tests/client.py \
+python tests/api_client.py \
 --server http://129.213.81.69:6006 \
 --token omni-ae342931-814d-4a49-97a6-cedf6af3dd18 \
 --ref-image assets/examples/img.png \
