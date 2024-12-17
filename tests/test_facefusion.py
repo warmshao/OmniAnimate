@@ -4,19 +4,20 @@
 # @Email   : wenshaoguo1026@gmail.com
 # @Project : OmniAnimate
 # @FileName: test_facefusion.py
-import sys
-sys.path.append(".")
-sys.path.append("..")
 
 import os
 import pdb
 import subprocess
 import json
 
-PROJECT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-
 
 def test_facefusion():
+    """
+    测试facefusion的效果
+    :return:
+    """
+    from omni_animate.common import constants
+    PROJECT_DIR = constants.PROJECT_DIR
     FACEFUSION_DIR = os.path.join(PROJECT_DIR, "third_party/facefusion")
     CUR_DIR = os.getcwd()
     os.chdir(FACEFUSION_DIR)
@@ -27,7 +28,7 @@ def test_facefusion():
         template_data = json.load(fin)
     image_path = os.path.join(PROJECT_DIR, "assets/examples/img.png")
     video_path = os.path.join(PROJECT_DIR, "assets/examples/001.mp4")
-    output_path = os.path.join(PROJECT_DIR, "results/001-img.mp4")
+    output_path = os.path.join(PROJECT_DIR, "results/001-img-facefusion.mp4")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     job_id = "omni_animate_v1"
     template_data['steps'][0]['args']['source_paths'] = [image_path]
