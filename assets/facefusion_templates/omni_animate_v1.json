@@ -6,10 +6,10 @@
         {
             "args": {
                 "source_paths": [
-                    "E:\\windows_tmp\\gradio\\6711639985c749d21b18aaff50ae5b7f84d78ed4508f67f935eb9ecf6aa54fbe\\source.jpg"
+                    ""
                 ],
-                "target_path": "E:\\windows_tmp\\gradio\\37dbe9b96646079b96cf758b14636954fc1d339168c76891ccea6e6ee6f64890\\target-720p.mp4",
-                "output_path": "E:\\windows_tmp\\289898145.mp4",
+                "target_path": "",
+                "output_path": "",
                 "face_detector_model": "yoloface",
                 "face_detector_angles": [
                     0

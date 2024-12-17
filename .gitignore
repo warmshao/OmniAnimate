@@ -3,8 +3,8 @@ checkpoints
 data
 results
 *.pyc
-animate_master.egg-info
 build
 dist
 third_party/facefusion/.assets
 third_party/facefusion/.jobs
+*.egg-info

@@ -1,0 +1,3 @@
+[submodule "third_party/facefusion"]
+	path = third_party/facefusion
+	url = https://github.com/facefusion/facefusion
