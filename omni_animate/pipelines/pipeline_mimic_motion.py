@@ -131,7 +131,7 @@ class MimicMotionPipeline(DiffusionPipeline):
         :param kwargs:
         :return:
         """
-        logger.info("loading models >>>")
+        logger.info("loading models")
         device, dtype = utils.get_optimize_device()
         logger.info(f"device: {device} dtype: {dtype}")
         # diffusion model
@@ -143,7 +143,7 @@ class MimicMotionPipeline(DiffusionPipeline):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="unet",
                             filename="config.json",
                             local_dir=svd_base_model_path)
-        self.unet = UNetSpatioTemporalConditionModel.from_config(
+        unet = UNetSpatioTemporalConditionModel.from_config(
             UNetSpatioTemporalConditionModel.load_config(svd_base_model_path, subfolder="unet"))
 
         if not os.path.exists(os.path.join(svd_base_model_path, "vae", "config.json")):
@@ -154,7 +154,7 @@ class MimicMotionPipeline(DiffusionPipeline):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="vae",
                             filename="diffusion_pytorch_model.fp16.safetensors",
                             local_dir=svd_base_model_path)
-        self.vae = AutoencoderKLTemporalDecoder.from_pretrained(
+        vae = AutoencoderKLTemporalDecoder.from_pretrained(
             svd_base_model_path, subfolder="vae", variant='fp16')
 
         if not os.path.exists(os.path.join(svd_base_model_path, "image_encoder", "config.json")):
@@ -165,24 +165,24 @@ class MimicMotionPipeline(DiffusionPipeline):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="image_encoder",
                             filename="model.fp16.safetensors",
                             local_dir=svd_base_model_path)
-        self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(
+        image_encoder = CLIPVisionModelWithProjection.from_pretrained(
             svd_base_model_path, subfolder="image_encoder", variant='fp16')
 
         if not os.path.exists(os.path.join(svd_base_model_path, "scheduler", "scheduler_config.json")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="scheduler",
                             filename="scheduler_config.json",
                             local_dir=svd_base_model_path)
-        self.scheduler = EulerDiscreteScheduler.from_pretrained(
+        scheduler = EulerDiscreteScheduler.from_pretrained(
             svd_base_model_path, subfolder="scheduler")
 
         if not os.path.exists(os.path.join(svd_base_model_path, "feature_extractor", "preprocessor_config.json")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="feature_extractor",
                             filename="preprocessor_config.json",
                             local_dir=svd_base_model_path)
-        self.feature_extractor = CLIPImageProcessor.from_pretrained(
+        feature_extractor = CLIPImageProcessor.from_pretrained(
             svd_base_model_path, subfolder="feature_extractor")
         # pose_net
-        self.pose_net = PoseNet(noise_latent_channels=self.unet.config.block_out_channels[0])
+        pose_net = PoseNet(noise_latent_channels=unet.config.block_out_channels[0])
 
         # MimicMotion model
         mimicmotion_model_id = "tencent/MimicMotion"
@@ -195,14 +195,14 @@ class MimicMotionPipeline(DiffusionPipeline):
                             local_dir=mimicmotion_base_model_path)
         mimic_state_dict = torch.load(mimicmotion_model_path, map_location=device)
         unet_state_dict = {key[5:]: val for key, val in mimic_state_dict.items() if key.startswith("unet.")}
-        self.unet.load_state_dict(unet_state_dict, strict=False)
-        self.unet.eval().to(device, dtype=dtype)
+        unet.load_state_dict(unet_state_dict, strict=False)
+        unet.eval().to(device, dtype=dtype)
 
         pose_net_state_dict = {key[9:]: val for key, val in mimic_state_dict.items() if key.startswith("pose_net.")}
-        self.pose_net.load_state_dict(pose_net_state_dict, strict=True)
-        self.pose_net.eval().to(device, dtype=dtype)
-        self.vae.eval().to(device, dtype=dtype)
-        self.image_encoder.eval().to(device, dtype=dtype)
+        pose_net.load_state_dict(pose_net_state_dict, strict=True)
+        pose_net.eval().to(device, dtype=dtype)
+        vae.eval().to(device, dtype=dtype)
+        image_encoder.eval().to(device, dtype=dtype)
 
         # OmniAnimate preprocess
         omni_animate_model_id = "warmshao/OmniAnimate"
@@ -234,12 +234,12 @@ class MimicMotionPipeline(DiffusionPipeline):
         self.pose_model = RTMWBodyPose2dModel(**pose_kwargs)
 
         self.register_modules(
-            vae=self.vae,
-            image_encoder=self.image_encoder,
-            unet=self.unet,
-            scheduler=self.scheduler,
-            feature_extractor=self.feature_extractor,
-            pose_net=self.pose_net,
+            vae=vae,
+            image_encoder=image_encoder,
+            unet=unet,
+            scheduler=scheduler,
+            feature_extractor=feature_extractor,
+            pose_net=pose_net,
         )
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
@@ -566,6 +566,7 @@ class MimicMotionPipeline(DiffusionPipeline):
             return_dict: bool = True,
             device: Union[str, torch.device] = None,
             scale_latents=False,
+            use_faceswap=True,
             **kwargs
     ):
         r"""

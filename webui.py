@@ -18,7 +18,6 @@ pipe: MimicMotionPipeline = None
 def process_animation(
         ref_image: str,
         drive_video: str,
-        token: str,
         height: int,
         width: int,
         keep_ratio: bool,
@@ -48,7 +47,7 @@ def process_animation(
             min_guidance_scale=guidance_scale,
             max_guidance_scale=guidance_scale,
             decode_chunk_size=8,
-            token=token
+            use_faceswap=True
         )
 
         return output_path
@@ -62,8 +61,6 @@ def parse_args():
                         help='服务器IP地址 (默认: 127.0.0.1)')
     parser.add_argument('--port', type=int, default=6006,
                         help='服务器端口 (默认: 6006)')
-    parser.add_argument('--token', type=str, default='',
-                        help='token')
     parser.add_argument('--share', action='store_true',
                         help='是否创建公共链接 (默认: False)')
     parser.add_argument('--debug', action='store_true',
@@ -106,7 +103,6 @@ def create_ui():
 
                 # Parameters
                 gr.Markdown("### 参数设置")
-                token_input = gr.Textbox(label="Token", placeholder="输入你的token")
 
                 with gr.Row():
                     height_input = gr.Number(label="Height", value=1024, precision=0)
@@ -131,7 +127,6 @@ def create_ui():
             inputs=[
                 ref_image_input,
                 drive_video_input,
-                token_input,
                 height_input,
                 width_input,
                 keep_ratio,

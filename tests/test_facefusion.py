@@ -18,8 +18,8 @@ def test_facefusion():
     :return:
     """
     from omni_animate.common import constants
-    PROJECT_DIR = constants.PROJECT_DIR
-    FACEFUSION_DIR = os.path.join(PROJECT_DIR, "third_party/facefusion")
+    PACKAGE_DIR = constants.PACKAGE_DIR
+    FACEFUSION_DIR = os.path.join(PACKAGE_DIR, "third_party/facefusion")
     CUR_DIR = os.getcwd()
     os.chdir(FACEFUSION_DIR)
     job_dir = '.jobs'
@@ -27,9 +27,9 @@ def test_facefusion():
     template_json = os.path.join(constants.CHECKPOINT_DIR, "facefusion_templates/omni_animate_v1.json")
     with open(template_json, "r") as fin:
         template_data = json.load(fin)
-    image_path = os.path.join(PROJECT_DIR, "../assets/examples/img.png")
-    video_path = os.path.join(PROJECT_DIR, "../assets/examples/001.mp4")
-    output_path = os.path.join(PROJECT_DIR, "../results/001-img-facefusion2.mp4")
+    image_path = os.path.join(PACKAGE_DIR, "../assets/examples/img.png")
+    video_path = os.path.join(PACKAGE_DIR, "../assets/examples/001.mp4")
+    output_path = os.path.join(PACKAGE_DIR, "../results/001-img-facefusion2.mp4")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     job_id = "omni_animate_v1"
     template_data['steps'][0]['args']['source_paths'] = [image_path]
