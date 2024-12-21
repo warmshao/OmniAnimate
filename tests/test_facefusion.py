@@ -7,6 +7,7 @@
 
 import os
 import pdb
+import shutil
 import subprocess
 import json
 
@@ -26,6 +27,9 @@ def test_facefusion():
     template_json = os.path.join(PROJECT_DIR, "assets/facefusion_templates/omni_animate_v1.json")
     with open(template_json, "r") as fin:
         template_data = json.load(fin)
+    # copy face ini config
+    facefusion_ini_path = os.path.join(PROJECT_DIR, "assets/facefusion_templates/facefusion.ini")
+    shutil.copy(src=facefusion_ini_path, dst="./facefusion.ini")
     image_path = os.path.join(PROJECT_DIR, "assets/examples/img.png")
     video_path = os.path.join(PROJECT_DIR, "assets/examples/001.mp4")
     output_path = os.path.join(PROJECT_DIR, "results/001-img-facefusion.mp4")

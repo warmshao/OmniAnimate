@@ -10,9 +10,9 @@ import gradio as gr
 import torch
 import argparse
 from typing import Optional
-from omni_animate.pipelines.pipeline_animate_master import AnimateMasterPipeline
+from omni_animate.pipelines.pipeline_mimic_motion import MimicMotionPipeline
 
-pipe: AnimateMasterPipeline = None
+pipe: MimicMotionPipeline = None
 
 
 def process_animation(
@@ -150,7 +150,7 @@ def create_ui():
 if __name__ == "__main__":
     # Parse command line arguments
     args = parse_args()
-    pipe = AnimateMasterPipeline(token=args.token)
+    pipe = MimicMotionPipeline(token=args.token)
     # Create and launch the UI
     demo = create_ui()
     demo.launch(

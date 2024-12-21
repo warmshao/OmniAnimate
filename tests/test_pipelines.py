@@ -12,7 +12,7 @@ sys.path.append(".")
 
 def test_animate_master_pipeline():
     import torch
-    from omni_animate.pipelines.pipeline_animate_master import AnimateMasterPipeline
+    from omni_animate.pipelines.pipeline_mimic_motion import AnimateMasterPipeline
     ref_image_path = "assets/examples/img.png"
     src_video_path = "assets/examples/001.mp4"
 

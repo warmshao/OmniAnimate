@@ -3,15 +3,13 @@ gradio==4.44.0
 gradio-rangeslider==0.0.6
 numpy==1.26.0
 onnx==1.16.1
-onnxruntime-gpu
+onnxruntime-gpu==1.19.2
 opencv-python==4.10.0.84
 psutil==6.0.0
 tqdm==4.66.5
 scipy==1.14.1
 av==12.0.0
-rsa
 diffusers==0.27.2
-pyarmor==8.5.0
 einops
 huggingface_hub[cli]==0.25.0
 transformers==4.43.0
