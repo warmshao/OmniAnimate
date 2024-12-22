@@ -1,0 +1,3 @@
+recursive-include omni_animate/third_party *
+recursive-exclude omni_animate/third_party/facefusion/.assets *
+recursive-exclude omni_animate/third_party/facefusion/.jobs *

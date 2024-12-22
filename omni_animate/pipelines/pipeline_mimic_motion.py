@@ -80,7 +80,7 @@ def tensor2vid(video: torch.Tensor, processor: "VaeImageProcessor", output_type:
 
 
 @dataclass
-class AnimateMasterPipelineOutput(BaseOutput):
+class MimicMotionPipelineOutput(BaseOutput):
     r"""
     Output class for mimicmotion pipeline.
 
@@ -93,7 +93,7 @@ class AnimateMasterPipelineOutput(BaseOutput):
     frames: Union[List[List[PIL.Image.Image]], np.ndarray, torch.Tensor]
 
 
-class AnimateMasterPipeline(DiffusionPipeline):
+class MimicMotionPipeline(DiffusionPipeline):
     r"""
     Pipeline to generate video from an input image using Stable Video Diffusion.
 
@@ -123,33 +123,27 @@ class AnimateMasterPipeline(DiffusionPipeline):
             self,
             **kwargs
     ):
-        with open(os.path.join(constants.PROJECT_DIR, "assets/keys/public.pem"), mode='rb') as publicfile:
-            keydata = publicfile.read()
-        self.pubkey = rsa.PublicKey.load_pkcs1_openssl_pem(keydata)
-        self.host_ip = kwargs.get('host_ip', '43.153.26.236')
+        self.init_vars(**kwargs)
         self.load_models(**kwargs)
 
-    def load_models(self, **kwargs):
-        token = kwargs.get("token", "")
-        encrypted_token = rsa.encrypt(token.encode(), self.pubkey)
-        encoded_token = base64.b64encode(encrypted_token).decode()
+    def init_vars(self, **kwargs):
+        """
+        初始化一些变量
+        :param kwargs:
+        :return:
+        """
+        self.omni_animate_model_id = kwargs.get("omni_animate_model_id", "warmshao/OmniAnimate")
 
-        # 调用auth接口
-        hf_token = ''
-        try:
-            response = requests.post(f'http://{self.host_ip}:5001/auth', json={'token': encoded_token})
-            response_data = response.json()
-            if response_data['valid']:
-                print("auth success!")
-                hf_token = response_data['hf_token']
-            else:
-                print("auth fail !")
-                pdb.set_trace()
-                # shutil.rmtree(constants.CHECKPOINT_DIR)
-        except Exception as e:
-            print("auth fail !!")
-            return
+    def load_models(self, **kwargs):
+        """
+        自动下载并加载模型
+        :param kwargs:
+        :return:
+        """
+        logger.info("loading models")
         device, dtype = utils.get_optimize_device()
+        logger.info(f"device: {device} dtype: {dtype}")
+        HF_TOKEN = os.environ.get('HF_TOKEN', '')
         # diffusion model
         svd_base_model_id = "stabilityai/stable-video-diffusion-img2vid-xt-1-1"
         svd_base_model_path = os.path.join(constants.CHECKPOINT_DIR, "stable-video-diffusion-img2vid-xt-1-1")
@@ -159,105 +153,96 @@ class AnimateMasterPipeline(DiffusionPipeline):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="unet",
                             filename="config.json",
                             local_dir=svd_base_model_path,
-                            token=hf_token)
-
-        self.unet = UNetSpatioTemporalConditionModel.from_config(
+                            token=HF_TOKEN)
+        unet = UNetSpatioTemporalConditionModel.from_config(
             UNetSpatioTemporalConditionModel.load_config(svd_base_model_path, subfolder="unet"))
 
         if not os.path.exists(os.path.join(svd_base_model_path, "vae", "config.json")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="vae",
                             filename="config.json",
-                            local_dir=svd_base_model_path,
-                            token=hf_token)
+                            local_dir=svd_base_model_path)
         if not os.path.exists(os.path.join(svd_base_model_path, "vae", "diffusion_pytorch_model.fp16.safetensors")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="vae",
                             filename="diffusion_pytorch_model.fp16.safetensors",
                             local_dir=svd_base_model_path,
-                            token=hf_token)
-        self.vae = AutoencoderKLTemporalDecoder.from_pretrained(
+                            token=HF_TOKEN)
+        vae = AutoencoderKLTemporalDecoder.from_pretrained(
             svd_base_model_path, subfolder="vae", variant='fp16')
 
         if not os.path.exists(os.path.join(svd_base_model_path, "image_encoder", "config.json")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="image_encoder",
                             filename="config.json",
                             local_dir=svd_base_model_path,
-                            token=hf_token)
+                            token=HF_TOKEN)
         if not os.path.exists(os.path.join(svd_base_model_path, "image_encoder", "model.fp16.safetensors")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="image_encoder",
                             filename="model.fp16.safetensors",
                             local_dir=svd_base_model_path,
-                            token=hf_token)
-        self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(
+                            token=HF_TOKEN)
+        image_encoder = CLIPVisionModelWithProjection.from_pretrained(
             svd_base_model_path, subfolder="image_encoder", variant='fp16')
 
         if not os.path.exists(os.path.join(svd_base_model_path, "scheduler", "scheduler_config.json")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="scheduler",
                             filename="scheduler_config.json",
                             local_dir=svd_base_model_path,
-                            token=hf_token)
-        self.scheduler = EulerDiscreteScheduler.from_pretrained(
+                            token=HF_TOKEN)
+        scheduler = EulerDiscreteScheduler.from_pretrained(
             svd_base_model_path, subfolder="scheduler")
 
         if not os.path.exists(os.path.join(svd_base_model_path, "feature_extractor", "preprocessor_config.json")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="feature_extractor",
                             filename="preprocessor_config.json",
                             local_dir=svd_base_model_path,
-                            token=hf_token)
-        self.feature_extractor = CLIPImageProcessor.from_pretrained(
+                            token=HF_TOKEN)
+        feature_extractor = CLIPImageProcessor.from_pretrained(
             svd_base_model_path, subfolder="feature_extractor")
         # pose_net
-        self.pose_net = PoseNet(noise_latent_channels=self.unet.config.block_out_channels[0])
+        pose_net = PoseNet(noise_latent_channels=unet.config.block_out_channels[0])
 
-        # AnimateMaster model
-        animate_master_model_id = "warmshao/AnimateMaster"
-        animate_master_base_model_path = os.path.join(constants.CHECKPOINT_DIR, "AnimateMaster")
-        os.makedirs(animate_master_base_model_path, exist_ok=True)
-        unet_model_path = os.path.join(animate_master_base_model_path, "MimicMotion-20240923170036", "unet.pth")
-        if not os.path.exists(unet_model_path):
-            hf_hub_download(repo_id=animate_master_model_id, subfolder="MimicMotion-20240923170036",
-                            filename="unet.pth",
-                            local_dir=animate_master_base_model_path,
-                            token=hf_token)
-        unet_state_dict = torch.load(unet_model_path)
-        self.unet.load_state_dict(unet_state_dict, strict=False)
-        self.unet.eval().to(device, dtype=dtype)
+        # MimicMotion model
+        mimicmotion_model_id = "tencent/MimicMotion"
+        mimicmotion_base_model_path = os.path.join(constants.CHECKPOINT_DIR, "MimicMotion")
+        os.makedirs(mimicmotion_base_model_path, exist_ok=True)
+        mimicmotion_model_path = os.path.join(mimicmotion_base_model_path, "MimicMotion_1-1.pth")
+        if not os.path.exists(mimicmotion_model_path):
+            hf_hub_download(repo_id=mimicmotion_model_id,
+                            filename="MimicMotion_1-1.pth",
+                            local_dir=mimicmotion_base_model_path)
+        mimic_state_dict = torch.load(mimicmotion_model_path, map_location=device)
+        unet_state_dict = {key[5:]: val for key, val in mimic_state_dict.items() if key.startswith("unet.")}
+        unet.load_state_dict(unet_state_dict, strict=False)
+        unet.eval().to(device, dtype=dtype)
 
-        cond_net_model_path = os.path.join(animate_master_base_model_path, "MimicMotion-20240923170036",
-                                           "cond_net_openpose.pth")
-        if not os.path.exists(cond_net_model_path):
-            hf_hub_download(repo_id=animate_master_model_id, subfolder="MimicMotion-20240923170036",
-                            filename="cond_net_openpose.pth",
-                            local_dir=animate_master_base_model_path,
-                            token=hf_token)
-        pose_net_state_dict = torch.load(cond_net_model_path)
-        self.pose_net.load_state_dict(pose_net_state_dict, strict=True)
-        self.pose_net.eval().to(device, dtype=dtype)
-        self.vae.eval().to(device, dtype=dtype)
-        self.image_encoder.eval().to(device, dtype=dtype)
+        pose_net_state_dict = {key[9:]: val for key, val in mimic_state_dict.items() if key.startswith("pose_net.")}
+        pose_net.load_state_dict(pose_net_state_dict, strict=True)
+        pose_net.eval().to(device, dtype=dtype)
+        vae.eval().to(device, dtype=dtype)
+        image_encoder.eval().to(device, dtype=dtype)
 
-        # preprocess
-        detect_model_path = os.path.join(animate_master_base_model_path, "preprocess",
-                                         "yolov10x.onnx")
+        # OmniAnimate preprocess
+        omni_animate_model_id = "warmshao/OmniAnimate"
+        ominianimate_base_model_path = os.path.join(constants.CHECKPOINT_DIR, "OmniAnimate")
+        os.makedirs(ominianimate_base_model_path, exist_ok=True)
+        detect_model_path = os.path.join(ominianimate_base_model_path, "preprocess", "yolov10x.onnx")
         if not os.path.exists(detect_model_path):
-            hf_hub_download(repo_id=animate_master_model_id, subfolder="preprocess",
+            hf_hub_download(repo_id=omni_animate_model_id,
+                            subfolder="preprocess",
                             filename="yolov10x.onnx",
-                            local_dir=animate_master_base_model_path,
-                            token=hf_token)
+                            local_dir=ominianimate_base_model_path
+                            )
         det_kwargs = dict(
             predict_type="ort",
             model_path=detect_model_path,
         )
-
         self.detect_model = YoloHumanDetectModel(**det_kwargs)
 
-        pose_model_path = os.path.join(animate_master_base_model_path, "preprocess",
+        pose_model_path = os.path.join(ominianimate_base_model_path, "preprocess",
                                        "rtmw-x_simcc-cocktail14_pt-ucoco_270e-384x288-f840f204_20231122.onnx")
         if not os.path.exists(pose_model_path):
-            hf_hub_download(repo_id=animate_master_model_id, subfolder="preprocess",
+            hf_hub_download(repo_id=omni_animate_model_id, subfolder="preprocess",
                             filename="rtmw-x_simcc-cocktail14_pt-ucoco_270e-384x288-f840f204_20231122.onnx",
-                            local_dir=animate_master_base_model_path,
-                            token=hf_token)
-
+                            local_dir=ominianimate_base_model_path)
         pose_kwargs = dict(
             predict_type="ort",
             model_path=pose_model_path,
@@ -265,12 +250,12 @@ class AnimateMasterPipeline(DiffusionPipeline):
         self.pose_model = RTMWBodyPose2dModel(**pose_kwargs)
 
         self.register_modules(
-            vae=self.vae,
-            image_encoder=self.image_encoder,
-            unet=self.unet,
-            scheduler=self.scheduler,
-            feature_extractor=self.feature_extractor,
-            pose_net=self.pose_net,
+            vae=vae,
+            image_encoder=image_encoder,
+            unet=unet,
+            scheduler=scheduler,
+            feature_extractor=feature_extractor,
+            pose_net=pose_net,
         )
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
@@ -493,6 +478,17 @@ class AnimateMasterPipeline(DiffusionPipeline):
         return extra_step_kwargs
 
     def pre_process(self, ref_image_path, src_video_path, stride=1, height=576, width=1024, **kwargs):
+        """
+        预处理 生成pose video
+        :param ref_image_path:
+        :param src_video_path:
+        :param stride:
+        :param height:
+        :param width:
+        :param kwargs:
+        :return:
+        """
+        logger.info("preprocess ref image and driving video")
         ref_image = Image.open(ref_image_path).convert("RGB")
         org_ref_w, org_ref_h = ref_image.size
         ref_pose_image = preprocess.preprocess_openpose_image(self.detect_model, self.pose_model,
@@ -524,16 +520,29 @@ class AnimateMasterPipeline(DiffusionPipeline):
         return [ref_image], pose_pixels, org_ref_w, org_ref_h, ow, oh
 
     def post_process(self, ref_image_path, animate_video_path, **kwargs):
+        """
+        使用facefusion 后处理 faceswap
+        :param ref_image_path:
+        :param animate_video_path:
+        :param kwargs:
+        :return:
+        """
+        logger.info("using facefusion to postprocess")
         image_path = os.path.abspath(ref_image_path)
         video_path = os.path.abspath(animate_video_path)
         output_path = os.path.splitext(video_path)[0] + "-face_swap.mp4"
-        PROJECT_DIR = constants.PROJECT_DIR
-        FACEFUSION_DIR = os.path.join(constants.PROJECT_DIR, "third_party/facefusion")
+        FACEFUSION_DIR = os.path.join(constants.PACKAGE_DIR, "third_party/facefusion")
         CUR_DIR = os.getcwd()
         os.chdir(FACEFUSION_DIR)
         job_dir = '.jobs'
         os.makedirs(os.path.join(job_dir, 'queued'), exist_ok=True)
-        template_json = os.path.join(PROJECT_DIR, "assets/facefusion_templates/omni_animate_v1.json")
+        template_json = os.path.join(constants.CHECKPOINT_DIR, "facefusion_templates/omni_animate_v1.json")
+        if not os.path.exists(template_json):
+            hf_hub_download(repo_id=self.omni_animate_model_id,
+                            subfolder="facefusion_templates",
+                            filename="omni_animate_v1.json",
+                            local_dir=constants.CHECKPOINT_DIR
+                            )
         with open(template_json, "r") as fin:
             template_data = json.load(fin)
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -577,8 +586,8 @@ class AnimateMasterPipeline(DiffusionPipeline):
             callback_on_step_end_tensor_inputs: List[str] = ["latents"],
             return_dict: bool = True,
             device: Union[str, torch.device] = None,
-            scale_latents=True,
-            token=None,
+            scale_latents=False,
+            use_faceswap=True,
             **kwargs
     ):
         r"""
@@ -669,18 +678,6 @@ class AnimateMasterPipeline(DiffusionPipeline):
         export_to_video(frames, "generated.mp4", fps=7)
         ```
         """
-        try:
-            encrypted_token = rsa.encrypt(token.encode(), self.pubkey)
-            encoded_token = base64.b64encode(encrypted_token).decode()
-            response = requests.post(f'http://{self.host_ip}:5001/new_connection', json={'token': encoded_token})
-            response_data = response.json()
-            if not response_data['success']:
-                print(response_data['error'])
-                return None
-        except Exception as e:
-            print(e.__str__())
-            return None
-
         if not os.path.exists(ref_image_path) or not os.path.exists(src_video_path):
             print(ref_image_path, src_video_path)
             return None
@@ -721,7 +718,8 @@ class AnimateMasterPipeline(DiffusionPipeline):
             # corresponds to doing no classifier free guidance.
             self._guidance_scale = max_guidance_scale
             # 3. Encode input image
-            image_embeddings = self._encode_image(image, device, num_videos_per_prompt, self.do_classifier_free_guidance)
+            image_embeddings = self._encode_image(image, device, num_videos_per_prompt,
+                                                  self.do_classifier_free_guidance)
 
             # NOTE: Stable Diffusion Video was conditioned on fps - 1, which
             # is why it is reduced here.
@@ -790,8 +788,12 @@ class AnimateMasterPipeline(DiffusionPipeline):
             self._num_timesteps = len(timesteps)
             indices = [[0, *range(i + 1, min(i + tile_size, num_frames))] for i in
                        range(0, num_frames - tile_size + 1, tile_size - tile_overlap)]
-            if indices[-1][-1] < num_frames - 1:
-                indices.append([0, *range(num_frames - tile_size + 1, num_frames)])
+            if indices:
+                if indices[-1][-1] < num_frames - 1:
+                    indices.append([0, *range(num_frames - tile_size + 1, num_frames)])
+            else:
+                indices.append([0, *range(num_frames)])
+                indices[-1].extend([num_frames - 1] * (tile_size - len(indices[-1])))
 
             with torch.cuda.device(device):
                 torch.cuda.empty_cache()
@@ -889,19 +891,10 @@ class AnimateMasterPipeline(DiffusionPipeline):
             write_video(save_vapth, frames.cpu(), wfps, options=options)
             torch.cuda.empty_cache()
             # face swap
-            save_vapth = self.post_process(ref_image_path, animate_video_path=save_vapth)
+            if use_faceswap:
+                save_vapth = self.post_process(ref_image_path, animate_video_path=save_vapth)
+            logger.info(f"animate video path: {save_vapth}")
             return save_vapth
         except Exception as e:
             print(e.__str__())
             return None
-        finally:
-            try:
-                encrypted_token = rsa.encrypt(token.encode(), self.pubkey)
-                encoded_token = base64.b64encode(encrypted_token).decode()
-                response = requests.post(f'http://{self.host_ip}:5001/release_connection', json={'token': encoded_token})
-                response_data = response.json()
-                if not response_data['success']:
-                    return None
-            except Exception as e:
-                print(e.__str__())
-                return None

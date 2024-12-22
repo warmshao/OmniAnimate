@@ -7,10 +7,12 @@ from setuptools import setup
 
 setup(
     name='omni_animate',
-    version='1.1.0',
+    version='1.2.0',
     description='OmniAnimate',
-    author='wenshao',
+    author='warmshao',
     author_email='wenshaoguo1026@gmail.com',
+    url='https://github.com/warmshao/OmniAnimate',
+    include_package_data=True,
     packages=[
         'omni_animate',
         'omni_animate.models',
