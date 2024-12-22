@@ -10,7 +10,7 @@ import pdb
 import shutil
 import subprocess
 import json
-
+from huggingface_hub import hf_hub_download
 
 def test_facefusion():
     """
@@ -25,6 +25,12 @@ def test_facefusion():
     job_dir = '.jobs'
     os.makedirs(os.path.join(job_dir, 'queued'), exist_ok=True)
     template_json = os.path.join(constants.CHECKPOINT_DIR, "facefusion_templates/omni_animate_v1.json")
+    if not os.path.exists(template_json):
+        hf_hub_download(repo_id="warmshao/OmniAnimate",
+                        subfolder="facefusion_templates",
+                        filename="omni_animate_v1.json",
+                        local_dir=constants.CHECKPOINT_DIR
+                        )
     with open(template_json, "r") as fin:
         template_data = json.load(fin)
     image_path = os.path.join(PACKAGE_DIR, "../assets/examples/img.png")

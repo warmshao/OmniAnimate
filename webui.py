@@ -22,6 +22,8 @@ class PipelineManager:
         }
         if default_pipe_type in self.pipeline_types:
             self.pipeline = self.pipeline_types[self.current_pipeline_type]()
+        else:
+            self.pipeline = None
 
     def switch_pipeline(self, pipeline_type: str):
         if pipeline_type == self.current_pipeline_type:

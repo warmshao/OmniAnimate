@@ -143,6 +143,7 @@ class MimicMotionPipeline(DiffusionPipeline):
         logger.info("loading models")
         device, dtype = utils.get_optimize_device()
         logger.info(f"device: {device} dtype: {dtype}")
+        HF_TOKEN = os.environ.get('HF_TOKEN', '')
         # diffusion model
         svd_base_model_id = "stabilityai/stable-video-diffusion-img2vid-xt-1-1"
         svd_base_model_path = os.path.join(constants.CHECKPOINT_DIR, "stable-video-diffusion-img2vid-xt-1-1")
@@ -151,7 +152,8 @@ class MimicMotionPipeline(DiffusionPipeline):
         if not os.path.exists(os.path.join(svd_base_model_path, "unet", "config.json")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="unet",
                             filename="config.json",
-                            local_dir=svd_base_model_path)
+                            local_dir=svd_base_model_path,
+                            token=HF_TOKEN)
         unet = UNetSpatioTemporalConditionModel.from_config(
             UNetSpatioTemporalConditionModel.load_config(svd_base_model_path, subfolder="unet"))
 
@@ -162,32 +164,37 @@ class MimicMotionPipeline(DiffusionPipeline):
         if not os.path.exists(os.path.join(svd_base_model_path, "vae", "diffusion_pytorch_model.fp16.safetensors")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="vae",
                             filename="diffusion_pytorch_model.fp16.safetensors",
-                            local_dir=svd_base_model_path)
+                            local_dir=svd_base_model_path,
+                            token=HF_TOKEN)
         vae = AutoencoderKLTemporalDecoder.from_pretrained(
             svd_base_model_path, subfolder="vae", variant='fp16')
 
         if not os.path.exists(os.path.join(svd_base_model_path, "image_encoder", "config.json")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="image_encoder",
                             filename="config.json",
-                            local_dir=svd_base_model_path)
+                            local_dir=svd_base_model_path,
+                            token=HF_TOKEN)
         if not os.path.exists(os.path.join(svd_base_model_path, "image_encoder", "model.fp16.safetensors")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="image_encoder",
                             filename="model.fp16.safetensors",
-                            local_dir=svd_base_model_path)
+                            local_dir=svd_base_model_path,
+                            token=HF_TOKEN)
         image_encoder = CLIPVisionModelWithProjection.from_pretrained(
             svd_base_model_path, subfolder="image_encoder", variant='fp16')
 
         if not os.path.exists(os.path.join(svd_base_model_path, "scheduler", "scheduler_config.json")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="scheduler",
                             filename="scheduler_config.json",
-                            local_dir=svd_base_model_path)
+                            local_dir=svd_base_model_path,
+                            token=HF_TOKEN)
         scheduler = EulerDiscreteScheduler.from_pretrained(
             svd_base_model_path, subfolder="scheduler")
 
         if not os.path.exists(os.path.join(svd_base_model_path, "feature_extractor", "preprocessor_config.json")):
             hf_hub_download(repo_id=svd_base_model_id, subfolder="feature_extractor",
                             filename="preprocessor_config.json",
-                            local_dir=svd_base_model_path)
+                            local_dir=svd_base_model_path,
+                            token=HF_TOKEN)
         feature_extractor = CLIPImageProcessor.from_pretrained(
             svd_base_model_path, subfolder="feature_extractor")
         # pose_net
@@ -530,11 +537,11 @@ class MimicMotionPipeline(DiffusionPipeline):
         job_dir = '.jobs'
         os.makedirs(os.path.join(job_dir, 'queued'), exist_ok=True)
         template_json = os.path.join(constants.CHECKPOINT_DIR, "facefusion_templates/omni_animate_v1.json")
-        if os.path.exists(template_json):
+        if not os.path.exists(template_json):
             hf_hub_download(repo_id=self.omni_animate_model_id,
                             subfolder="facefusion_templates",
                             filename="omni_animate_v1.json",
-                            local_dir=os.path.dirname(template_json)
+                            local_dir=constants.CHECKPOINT_DIR
                             )
         with open(template_json, "r") as fin:
             template_data = json.load(fin)
@@ -781,8 +788,12 @@ class MimicMotionPipeline(DiffusionPipeline):
             self._num_timesteps = len(timesteps)
             indices = [[0, *range(i + 1, min(i + tile_size, num_frames))] for i in
                        range(0, num_frames - tile_size + 1, tile_size - tile_overlap)]
-            if indices[-1][-1] < num_frames - 1:
-                indices.append([0, *range(num_frames - tile_size + 1, num_frames)])
+            if indices:
+                if indices[-1][-1] < num_frames - 1:
+                    indices.append([0, *range(num_frames - tile_size + 1, num_frames)])
+            else:
+                indices.append([0, *range(num_frames)])
+                indices[-1].extend([num_frames - 1] * (tile_size - len(indices[-1])))
 
             with torch.cuda.device(device):
                 torch.cuda.empty_cache()
@@ -880,8 +891,9 @@ class MimicMotionPipeline(DiffusionPipeline):
             write_video(save_vapth, frames.cpu(), wfps, options=options)
             torch.cuda.empty_cache()
             # face swap
-            if kwargs.get("use_faceswap"):
+            if use_faceswap:
                 save_vapth = self.post_process(ref_image_path, animate_video_path=save_vapth)
+            logger.info(f"animate video path: {save_vapth}")
             return save_vapth
         except Exception as e:
             print(e.__str__())
