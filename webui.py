@@ -5,17 +5,53 @@
 # @Project : OmniAnimate
 # @FileName: webui.py
 import pdb
+import gc
 
 import gradio as gr
 import torch
 import argparse
-from typing import Optional
+from typing import Optional, Dict
 from omni_animate.pipelines.pipeline_mimic_motion import MimicMotionPipeline
 
-pipe: MimicMotionPipeline = None
+
+class PipelineManager:
+    def __init__(self, default_pipe_type="MimicMotion"):
+        self.current_pipeline_type = default_pipe_type
+        self.pipeline_types = {
+            "MimicMotion": MimicMotionPipeline
+        }
+        if default_pipe_type in self.pipeline_types:
+            self.pipeline = self.pipeline_types[self.current_pipeline_type]()
+
+    def switch_pipeline(self, pipeline_type: str):
+        if pipeline_type == self.current_pipeline_type:
+            return
+
+        # Clean up existing pipeline
+        if self.pipeline is not None:
+            del self.pipeline
+            torch.cuda.empty_cache()
+            gc.collect()
+
+        # Create new pipeline
+        pipeline_class = self.pipeline_types[pipeline_type]
+        self.pipeline = pipeline_class()
+        self.current_pipeline_type = pipeline_type
+
+    def get_pipeline(self):
+        return self.pipeline
+
+
+pipeline_manager = None
+
+
+def switch_pipeline(pipeline_type: str):
+    global pipeline_manager
+    pipeline_manager.switch_pipeline(pipeline_type)
 
 
 def process_animation(
+        pipeline_type: str,
         ref_image: str,
         drive_video: str,
         height: int,
@@ -28,29 +64,35 @@ def process_animation(
         guidance_scale: float
 ) -> Optional[str]:
     try:
-        global pipe
-        # Run the animation pipeline
-        output_path = pipe(
-            ref_image_path=ref_image,
-            src_video_path=drive_video,
-            tile_size=32,
-            tile_overlap=6,
-            height=height,
-            width=width,
-            stride=stride,
-            fps=8,
-            noise_aug_strength=0,
-            num_inference_steps=denoise_steps,
-            keep_ratio=keep_ratio,
-            keep_ref_dim=keep_ref_dim,
-            seed=seed,
-            min_guidance_scale=guidance_scale,
-            max_guidance_scale=guidance_scale,
-            decode_chunk_size=8,
-            use_faceswap=True
-        )
+        global pipeline_manager
+        # Switch to selected pipeline if needed
+        switch_pipeline(pipeline_type)
+        pipe = pipeline_manager.get_pipeline()
 
-        return output_path
+        # Run the animation pipeline
+        if pipeline_type == "MimicMotion":
+            output_path = pipe(
+                ref_image_path=ref_image,
+                src_video_path=drive_video,
+                tile_size=32,
+                tile_overlap=6,
+                height=height,
+                width=width,
+                stride=stride,
+                fps=8,
+                noise_aug_strength=0,
+                num_inference_steps=denoise_steps,
+                keep_ratio=keep_ratio,
+                keep_ref_dim=keep_ref_dim,
+                seed=seed,
+                min_guidance_scale=guidance_scale,
+                max_guidance_scale=guidance_scale,
+                decode_chunk_size=8,
+                use_faceswap=True
+            )
+            return output_path
+        else:
+            raise NotImplementedError
     except Exception as e:
         raise gr.Error(f"处理失败: {str(e)}")
 
@@ -82,7 +124,8 @@ js_func = """
 
 # Create the Gradio interface
 def create_ui():
-    with gr.Blocks(title="OmniAnimate", theme=gr.themes.Soft(font=[gr.themes.GoogleFont("Plus Jakarta Sans")]), js=js_func) as demo:
+    with gr.Blocks(title="OmniAnimate", theme=gr.themes.Soft(font=[gr.themes.GoogleFont("Plus Jakarta Sans")]),
+                   js=js_func) as demo:
         gr.Markdown("# OmniAnimate")
 
         with gr.Row():
@@ -103,6 +146,12 @@ def create_ui():
 
                 # Parameters
                 gr.Markdown("### 参数设置")
+
+                pipeline_type = gr.Dropdown(
+                    choices=["MimicMotion", "MusePose"],
+                    value="MimicMotion",
+                    label="Pipeline类型"
+                )
 
                 with gr.Row():
                     height_input = gr.Number(label="Height", value=1024, precision=0)
@@ -125,6 +174,7 @@ def create_ui():
         run_btn.click(
             fn=process_animation,
             inputs=[
+                pipeline_type,
                 ref_image_input,
                 drive_video_input,
                 height_input,
@@ -145,7 +195,8 @@ def create_ui():
 if __name__ == "__main__":
     # Parse command line arguments
     args = parse_args()
-    pipe = MimicMotionPipeline(token=args.token)
+    # Initialize pipeline manager
+    pipeline_manager = PipelineManager()
     # Create and launch the UI
     demo = create_ui()
     demo.launch(

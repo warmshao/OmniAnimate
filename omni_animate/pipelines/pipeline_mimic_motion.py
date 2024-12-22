@@ -123,7 +123,16 @@ class MimicMotionPipeline(DiffusionPipeline):
             self,
             **kwargs
     ):
+        self.init_vars(**kwargs)
         self.load_models(**kwargs)
+
+    def init_vars(self, **kwargs):
+        """
+        初始化一些变量
+        :param kwargs:
+        :return:
+        """
+        self.omni_animate_model_id = kwargs.get("omni_animate_model_id", "warmshao/OmniAnimate")
 
     def load_models(self, **kwargs):
         """
@@ -505,7 +514,7 @@ class MimicMotionPipeline(DiffusionPipeline):
 
     def post_process(self, ref_image_path, animate_video_path, **kwargs):
         """
-        后处理 faceswap
+        使用facefusion 后处理 faceswap
         :param ref_image_path:
         :param animate_video_path:
         :param kwargs:
@@ -515,13 +524,18 @@ class MimicMotionPipeline(DiffusionPipeline):
         image_path = os.path.abspath(ref_image_path)
         video_path = os.path.abspath(animate_video_path)
         output_path = os.path.splitext(video_path)[0] + "-face_swap.mp4"
-        PROJECT_DIR = constants.PROJECT_DIR
-        FACEFUSION_DIR = os.path.join(constants.PROJECT_DIR, "third_party/facefusion")
+        FACEFUSION_DIR = os.path.join(constants.PACKAGE_DIR, "third_party/facefusion")
         CUR_DIR = os.getcwd()
         os.chdir(FACEFUSION_DIR)
         job_dir = '.jobs'
         os.makedirs(os.path.join(job_dir, 'queued'), exist_ok=True)
-        template_json = os.path.join(PROJECT_DIR, "assets/facefusion_templates/omni_animate_v1.json")
+        template_json = os.path.join(constants.CHECKPOINT_DIR, "facefusion_templates/omni_animate_v1.json")
+        if os.path.exists(template_json):
+            hf_hub_download(repo_id=self.omni_animate_model_id,
+                            subfolder="facefusion_templates",
+                            filename="omni_animate_v1.json",
+                            local_dir=os.path.dirname(template_json)
+                            )
         with open(template_json, "r") as fin:
             template_data = json.load(fin)
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

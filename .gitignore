@@ -5,6 +5,6 @@ results
 *.pyc
 build
 dist
-third_party/facefusion/.assets
-third_party/facefusion/.jobs
+.assets
+.jobs
 *.egg-info
